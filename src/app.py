@@ -11,6 +11,7 @@ from src.email_client import fetch_emails_list, download_pdf_for_email
 from src.pdf_parser import extract_text_from_pdf
 from src.summarizer import summarize_text
 from src.word_cloud_gen import generate_word_cloud
+from src.tfidf_analyzer import extract_tfidf_keywords, generate_tfidf_chart
 
 # Initialize logger
 setup_logger()
@@ -227,3 +228,30 @@ if st.session_state.email_list is not None and len(st.session_state.email_list) 
                                 save_processed_data(msg_id, results)
                                 st.rerun()
                 st.markdown("---")
+
+            # --- TF-IDF 핵심 키워드 분석 (선택한 전체 문서 비교) ---
+            all_texts_for_tfidf = {}
+            for em in selected_emails:
+                mid = em.get("message_id", em["id"])
+                for item in processed_data.get(mid, []):
+                    if item.get("text") and "error" not in item:
+                        key = f"{em['subject'][:25]} / {item.get('file', '본문')}"
+                        all_texts_for_tfidf[key] = item["text"]
+
+            if all_texts_for_tfidf:
+                st.header("📊 TF-IDF 핵심 키워드 분석")
+                st.caption(
+                    f"선택한 {len(all_texts_for_tfidf)}개 문서를 동시에 비교 — "
+                    "단순 빈도가 아닌 '이 문서에서만 특징적인 단어'를 추출합니다."
+                )
+                tfidf_results = extract_tfidf_keywords(all_texts_for_tfidf)
+                cols = st.columns(min(len(tfidf_results), 2))
+                for idx, (doc_name, keywords) in enumerate(tfidf_results.items()):
+                    with cols[idx % 2]:
+                        safe_name = "".join(c if c.isalnum() else "_" for c in doc_name[:20])
+                        chart_filename = f"tfidf_{idx}_{safe_name}.png"
+                        chart_path = generate_tfidf_chart(
+                            keywords, title=doc_name, output_filename=chart_filename
+                        )
+                        if chart_path and Path(chart_path).exists():
+                            st.image(str(chart_path), caption=doc_name, use_container_width=True)
