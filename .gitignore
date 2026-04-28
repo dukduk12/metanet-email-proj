@@ -14,3 +14,7 @@ wheels/
 data/attachments/
 data/outputs/
 logs/
+
+# Claude 관련 확장 프로그램 파일 무시
+.cline/
+claude_config.json

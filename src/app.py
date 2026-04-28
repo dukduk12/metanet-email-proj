@@ -10,8 +10,9 @@ from src.logging_config import setup_logger
 from src.email_client import fetch_emails_list, download_pdf_for_email
 from src.pdf_parser import extract_text_from_pdf
 from src.summarizer import summarize_text
-from src.word_cloud_gen import generate_word_cloud
+from src.db_client import ChromaClient
 from src.tfidf_analyzer import extract_tfidf_keywords, generate_tfidf_chart
+from src.network_viz import build_and_render_network
 
 # Initialize logger
 setup_logger()
@@ -202,8 +203,12 @@ if st.session_state.email_list is not None and len(st.session_state.email_list) 
                                             continue
                                             
                                         summary = summarize_text(text)
-                                        wc_filename = f"wordcloud_{e_id}_{pdf_path.name}.png"
-                                        wc_path = generate_word_cloud(text, output_filename=wc_filename)
+                                        wc_filename = f"tfidf_{e_id}_{pdf_path.name}.png"
+                                        
+                                        # TF-IDF 차트 생성 로직으로 변경
+                                        keywords_dict = extract_tfidf_keywords({pdf_path.name: text})
+                                        keywords = keywords_dict.get(pdf_path.name, [])
+                                        wc_path = generate_tfidf_chart(keywords, title=pdf_path.name, output_filename=wc_filename)
                                         
                                         results.append({
                                             "file": pdf_path.name,
@@ -227,31 +232,71 @@ if st.session_state.email_list is not None and len(st.session_state.email_list) 
                             if results:
                                 save_processed_data(msg_id, results)
                                 st.rerun()
+                                
+                    # --- Similar Emails Recommendation ---
+                    if msg_id in processed_data:
+                        st.markdown("##### 💡 과거 유사 업무 메일 추천")
+                        results = processed_data[msg_id]
+                        if results and 'summary' in results[0]:
+                            search_text = f"제목: {email_meta['subject']}\n요약: {results[0]['summary']}"
+                            
+                            with st.spinner("유사한 과거 메일을 검색하는 중..."):
+                                chroma_client = ChromaClient()
+                                similar_emails = chroma_client.query_similar(search_text, n_results=3)
+                                
+                                has_recommendation = False
+                                if similar_emails:
+                                    for idx, sim in enumerate(similar_emails):
+                                        has_recommendation = True
+                                        distance = sim.get('distance', 0.0)
+                                        similarity = max(0, 100 - (distance * 100))
+                                        
+                                        st.info(f"**{sim['metadata'].get('title', '제목 없음')}** (유사도: {similarity:.1f}%)\n\n"
+                                                f"📅 *날짜:* {sim['metadata'].get('date', '')} | 👤 *보낸사람:* {sim['metadata'].get('sender', '')}\n\n"
+                                                f"{sim['metadata'].get('summary', '')}")
+                                
+                                if not has_recommendation:
+                                    st.write("유사한 과거 메일이 없습니다.")
+                                    
                 st.markdown("---")
 
-            # --- TF-IDF 핵심 키워드 분석 (선택한 전체 문서 비교) ---
-            all_texts_for_tfidf = {}
+            # --- 선택 메일 전체 비교: TF-IDF + 네트워크 ---
+            all_texts = {}
+            sender_docs_net = {}
             for em in selected_emails:
                 mid = em.get("message_id", em["id"])
                 for item in processed_data.get(mid, []):
                     if item.get("text") and "error" not in item:
                         key = f"{em['subject'][:25]} / {item.get('file', '본문')}"
-                        all_texts_for_tfidf[key] = item["text"]
+                        all_texts[key] = item["text"]
+                        sender_docs_net.setdefault(em["sender"], []).append({
+                            "file": item.get("file", "본문"),
+                            "text": item["text"],
+                            "email_subject": em["subject"],
+                            "email_date": em["date"],
+                        })
 
-            if all_texts_for_tfidf:
-                st.header("📊 TF-IDF 핵심 키워드 분석")
-                st.caption(
-                    f"선택한 {len(all_texts_for_tfidf)}개 문서를 동시에 비교 — "
-                    "단순 빈도가 아닌 '이 문서에서만 특징적인 단어'를 추출합니다."
-                )
-                tfidf_results = extract_tfidf_keywords(all_texts_for_tfidf)
+            tfidf_results = extract_tfidf_keywords(all_texts) if all_texts else {}
+
+            if tfidf_results:
+                st.header("📊 TF-IDF 핵심 키워드 비교")
+                st.caption(f"선택한 {len(tfidf_results)}개 문서 동시 비교 — 각 문서에서만 특징적인 단어 추출")
                 cols = st.columns(min(len(tfidf_results), 2))
                 for idx, (doc_name, keywords) in enumerate(tfidf_results.items()):
                     with cols[idx % 2]:
-                        safe_name = "".join(c if c.isalnum() else "_" for c in doc_name[:20])
-                        chart_filename = f"tfidf_{idx}_{safe_name}.png"
+                        safe = "".join(c if c.isalnum() else "_" for c in doc_name[:20])
                         chart_path = generate_tfidf_chart(
-                            keywords, title=doc_name, output_filename=chart_filename
+                            keywords, title=doc_name, output_filename=f"tfidf_cmp_{idx}_{safe}.png"
                         )
                         if chart_path and Path(chart_path).exists():
                             st.image(str(chart_path), caption=doc_name, use_container_width=True)
+
+            if sender_docs_net:
+                st.header("🕸️ 업무 관계 네트워크")
+                st.caption("● 발신자  ■ PDF — 점선은 내용 유사도, 색깔은 업무 클러스터 | 첫 실행 시 모델 다운로드 ~400MB")
+                with st.spinner("임베딩 계산 중... (문서 수에 따라 10~30초)"):
+                    net_fig = build_and_render_network(sender_docs_net, tfidf_results)
+                if net_fig:
+                    st.plotly_chart(net_fig, use_container_width=True)
+                else:
+                    st.info("네트워크를 생성하기에 데이터가 부족합니다.")

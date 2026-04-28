@@ -5,15 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "chromadb>=1.5.8",
     "google-genai>=1.73.1",
     "loguru>=0.7.3",
     "matplotlib>=3.10.9",
+    "networkx>=3.6.1",
     "openai>=2.32.0",
     "pandas>=3.0.2",
+    "plotly>=6.7.0",
     "pydantic-settings>=2.14.0",
     "pymupdf>=1.27.2.3",
     "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
+    "sentence-transformers>=5.4.1",
     "streamlit>=1.56.0",
     "wordcloud>=1.9.6",
 ]
