@@ -95,85 +95,135 @@ if st.button("목록 조회", type="primary"):
 
 # --- 2. Email List & Individual Analysis ---
 if st.session_state.email_list is not None and len(st.session_state.email_list) > 0:
-    st.header("2. 개별 메일 분석")
-    st.markdown("원하는 말머리를 선택한 후, 첨부파일이 있는 메일의 **'이 메일 분석하기'** 버튼을 클릭하세요.")
+    st.header("2. 메일 선택 및 분석")
+    st.markdown("분석할 메일을 테이블에서 선택한 뒤 **선택한 메일 분석하기** 버튼을 클릭하세요.")
     
     st.session_state.selected_tags = st.multiselect(
-        "분석할 말머리 선택 (여러 개 선택 가능)", 
+        "필터: 말머리 선택", 
         options=st.session_state.unique_tags, 
         default=st.session_state.selected_tags
     )
     
+    show_only_pdf = st.checkbox("PDF 첨부된 메일만 보기", value=True)
+    
     filtered_emails = []
     for e in st.session_state.email_list:
         if any(tag in st.session_state.selected_tags for tag in e.get("tags", [])):
+            if show_only_pdf and not e.get("has_attachment", False):
+                continue
             filtered_emails.append(e)
             
     if not filtered_emails:
-         st.info("선택한 말머리에 해당하는 메일이 없습니다.")
-    
-    processed_data = load_processed_data()
-    
-    for email_meta in filtered_emails:
-        e_id = email_meta['id']
-        msg_id = email_meta.get('message_id', e_id)
-        has_att = email_meta.get('has_attachment', False)
+         st.info("조건에 맞는 메일이 없습니다.")
+    else:
+        import pandas as pd
         
-        with st.container():
-            att_icon = "📎" if has_att else ""
-            st.markdown(f"#### {att_icon} 📄 {email_meta['subject']}")
-            st.markdown(f"*수신일:* {email_meta['date']} | *보낸사람:* {email_meta['sender']}")
+        df_data = []
+        for e in filtered_emails:
+            df_data.append({
+                "선택": False,
+                "id": e["id"],
+                "날짜": e["date"],
+                "보낸사람": e["sender"],
+                "제목": e["subject"],
+                "PDF 개수": e.get("pdf_count", 0),
+                "첨부파일명": ", ".join(e.get("pdf_names", [])),
+                "본문 미리보기": e.get("body_snippet", "")
+            })
             
-            if msg_id in processed_data:
-                st.success("✅ 이미 분석이 완료된 메일입니다. (저장된 결과를 불러옵니다)")
-                results = processed_data[msg_id]
+        df = pd.DataFrame(df_data)
+        
+        edited_df = st.data_editor(
+            df,
+            column_config={
+                "선택": st.column_config.CheckboxColumn("선택", default=False),
+                "id": None, # Hide ID column
+            },
+            disabled=["날짜", "보낸사람", "제목", "PDF 개수", "첨부파일명", "본문 미리보기"],
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        selected_ids = edited_df[edited_df["선택"] == True]["id"].tolist()
+        
+        if st.button("선택한 메일 분석하기", type="primary", disabled=len(selected_ids)==0):
+            st.session_state.analysis_triggered = True
+            st.session_state.selected_email_ids = selected_ids
+            
+        if getattr(st.session_state, 'analysis_triggered', False):
+            st.markdown("---")
+            st.header("분석 결과")
+            processed_data = load_processed_data()
+            
+            selected_emails = [e for e in filtered_emails if e["id"] in st.session_state.selected_email_ids]
+            
+            for email_meta in selected_emails:
+                e_id = email_meta['id']
+                msg_id = email_meta.get('message_id', e_id)
+                has_att = email_meta.get('has_attachment', False)
                 
-                with st.expander("저장된 분석 결과 보기", expanded=True):
-                    for item in results:
-                        if "error" in item:
-                            st.warning(f"**{item.get('file', '문서')}**: {item['error']}")
-                        else:
-                            st.markdown(f"**파일:** `{item['file']}`")
-                            st.info("💡 **요약 결과**")
-                            st.write(item['summary'])
-                            
-                            if item.get('wc_path') and Path(item['wc_path']).exists():
-                                st.image(item['wc_path'], caption=f"워드 클라우드 - {item['file']}")
-                                
-                            with st.popover("원본 텍스트 보기"):
-                                st.text(item['text'])
-            else:
-                # 개별 분석 버튼
-                if not has_att:
-                    st.info("이 메일에는 첨부파일이 없습니다.")
-                else:
-                    if st.button("이 메일 분석하기", key=f"btn_{e_id}"):
-                        with st.spinner("해당 메일의 PDF를 다운로드하고 분석하는 중..."):
-                            pdf_paths = download_pdf_for_email(e_id)
-                            
-                            if not pdf_paths:
-                                # PDF가 없는 경우 에러를 저장
-                                save_processed_data(msg_id, [{"error": "이 메일에는 PDF 첨부파일이 없습니다."}])
-                                st.rerun()
-                            else:
-                                results = []
-                                for pdf_path in pdf_paths:
-                                    text = extract_text_from_pdf(pdf_path)
-                                    if not text.strip():
-                                        results.append({"file": pdf_path.name, "error": "텍스트를 추출할 수 없습니다."})
-                                        continue
-                                        
-                                    summary = summarize_text(text)
-                                    wc_filename = f"wordcloud_{e_id}_{pdf_path.name}.png"
-                                    wc_path = generate_word_cloud(text, output_filename=wc_filename)
+                with st.container():
+                    att_icon = "📎" if has_att else ""
+                    st.markdown(f"#### {att_icon} 📄 {email_meta['subject']}")
+                    st.markdown(f"*수신일:* {email_meta['date']} | *보낸사람:* {email_meta['sender']}")
+                    
+                    if msg_id in processed_data:
+                        st.success("✅ 이미 분석이 완료된 메일입니다. (저장된 결과를 불러옵니다)")
+                        results = processed_data[msg_id]
+                        
+                        with st.expander("저장된 분석 결과 보기", expanded=True):
+                            for item in results:
+                                if "error" in item:
+                                    st.warning(f"**{item.get('file', '문서')}**: {item['error']}")
+                                else:
+                                    if item.get('file'):
+                                        st.markdown(f"**파일:** `{item['file']}`")
+                                    st.info("💡 **요약 결과**")
+                                    st.write(item['summary'])
                                     
+                                    if item.get('wc_path') and Path(item['wc_path']).exists():
+                                        st.image(item['wc_path'], caption=f"워드 클라우드 - {item.get('file', '문서')}")
+                                        
+                                    with st.popover("원본 텍스트 보기"):
+                                        st.text(item['text'])
+                    else:
+                        with st.spinner("해당 메일의 데이터를 다운로드하고 분석하는 중..."):
+                            results = []
+                            if has_att:
+                                pdf_paths = download_pdf_for_email(e_id)
+                                if not pdf_paths:
+                                    results.append({"error": "이 메일에는 PDF 첨부파일이 없습니다."})
+                                else:
+                                    for pdf_path in pdf_paths:
+                                        text = extract_text_from_pdf(pdf_path)
+                                        if not text.strip():
+                                            results.append({"file": pdf_path.name, "error": "텍스트를 추출할 수 없습니다."})
+                                            continue
+                                            
+                                        summary = summarize_text(text)
+                                        wc_filename = f"wordcloud_{e_id}_{pdf_path.name}.png"
+                                        wc_path = generate_word_cloud(text, output_filename=wc_filename)
+                                        
+                                        results.append({
+                                            "file": pdf_path.name,
+                                            "text": text,
+                                            "summary": summary,
+                                            "wc_path": wc_path
+                                        })
+                            else:
+                                text = email_meta.get("body_snippet", "")
+                                if not text:
+                                    results.append({"error": "분석할 텍스트가 없습니다."})
+                                else:
+                                    summary = summarize_text(text)
                                     results.append({
-                                        "file": pdf_path.name,
+                                        "file": "메일 본문",
                                         "text": text,
                                         "summary": summary,
-                                        "wc_path": wc_path
+                                        "wc_path": ""
                                     })
+                            
+                            if results:
                                 save_processed_data(msg_id, results)
                                 st.rerun()
-            st.markdown("---")
-            st.markdown("---")
+                st.markdown("---")

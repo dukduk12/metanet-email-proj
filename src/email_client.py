@@ -26,6 +26,25 @@ def decode_mime_words(s: str) -> str:
             text += word
     return text
 
+def extract_body_text(msg) -> str:
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            cdispo = str(part.get("Content-Disposition"))
+            if ctype == "text/plain" and "attachment" not in cdispo:
+                try:
+                    return part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8", errors="ignore").strip()
+                except Exception:
+                    pass
+    else:
+        ctype = msg.get_content_type()
+        if ctype == "text/plain":
+            try:
+                return msg.get_payload(decode=True).decode(msg.get_content_charset() or "utf-8", errors="ignore").strip()
+            except Exception:
+                pass
+    return ""
+
 def get_imap_connection():
     mail = imaplib.IMAP4_SSL(settings.imap_host, settings.imap_port)
     mail.login(settings.gmail_email, settings.gmail_app_password)
@@ -79,7 +98,7 @@ def fetch_emails_list(start_date: date, end_date: date) -> List[Dict[str, Any]]:
     
     # 수천 개의 메일 헤더를 단 '한 번의' 네트워크 요청(Batch)으로 전부 가져오기
     fetch_str = b",".join(email_ids)
-    status, msg_data = mail.fetch(fetch_str, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE FROM MESSAGE-ID)])')
+    status, msg_data = mail.fetch(fetch_str, '(BODY.PEEK[HEADER.FIELDS (SUBJECT DATE FROM MESSAGE-ID)] BODYSTRUCTURE)')
     
     if status != "OK":
         mail.logout()
@@ -100,6 +119,18 @@ def fetch_emails_list(start_date: date, end_date: date) -> List[Dict[str, Any]]:
                 
             has_attachment = e_id_bytes in attachment_ids
             
+            pdfs = []
+            if has_attachment:
+                bs_str = response_part[0].decode('utf-8', errors='ignore')
+                filenames = re.findall(r'"NAME"\s+"([^"]+)"|"FILENAME"\s+"([^"]+)"', bs_str, re.IGNORECASE)
+                for f1, f2 in filenames:
+                    name = f1 if f1 else f2
+                    if name:
+                        decoded_name = decode_mime_words(name)
+                        if decoded_name.lower().endswith('.pdf'):
+                            pdfs.append(decoded_name)
+                pdfs = list(dict.fromkeys(pdfs))
+            
             msg_date = msg.get("Date", "Unknown Date")
             sender = decode_mime_words(msg.get("From", "Unknown Sender"))
             message_id = msg.get("Message-ID", e_id_bytes.decode())
@@ -111,9 +142,28 @@ def fetch_emails_list(start_date: date, end_date: date) -> List[Dict[str, Any]]:
                 "tags": [f"[{t.strip()}]" for t in tags if t.strip()], # 대괄호를 다시 붙여서 저장
                 "date": msg_date,
                 "sender": sender,
-                "has_attachment": has_attachment
+                "has_attachment": has_attachment,
+                "pdf_names": pdfs,
+                "pdf_count": len(pdfs),
+                "body_snippet": ""
             })
                 
+    # Fetch body for emails without attachments
+    no_att_ids = [e["id"].encode() for e in email_list if not e["has_attachment"]]
+    if no_att_ids:
+        fetch_str_no_att = b",".join(no_att_ids)
+        status, body_data = mail.fetch(fetch_str_no_att, '(RFC822)')
+        if status == "OK":
+            snippet_map = {}
+            for response_part in body_data:
+                if isinstance(response_part, tuple):
+                    e_id_bytes = response_part[0].split()[0]
+                    msg = email.message_from_bytes(response_part[1])
+                    snippet_map[e_id_bytes.decode()] = extract_body_text(msg)[:100]
+            for e in email_list:
+                if e["id"] in snippet_map:
+                    e["body_snippet"] = snippet_map[e["id"]]
+
     mail.logout()
     # 최신 메일이 먼저 표시되도록 ID 역순 정렬
     email_list.sort(key=lambda x: int(x["id"]), reverse=True)
