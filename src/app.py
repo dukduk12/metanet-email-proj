@@ -15,6 +15,10 @@ from src.tfidf_anlayzer import extract_tfidf_keywords, generate_tfidf_chart
 from src.db_client import ChromaClient
 from src.tfidf_analyzer import extract_tfidf_keywords, generate_tfidf_chart
 from src.network_viz import build_and_render_network
+from src.ngram_analyzer import (
+    extract_frequency, extract_ngrams,
+    generate_frequency_chart, generate_ngram_chart,
+)
 
 # Initialize logger
 setup_logger()
@@ -302,6 +306,71 @@ if st.session_state.email_list is not None and len(st.session_state.email_list) 
                         )
                         if chart_path and Path(chart_path).exists():
                             st.image(str(chart_path), caption=doc_name, use_container_width=True)
+
+            # --- 빈도분석 & N-gram ---
+            if all_texts:
+                st.header("📈 빈도 분석 & N-gram")
+                combined_text = " ".join(all_texts.values())
+
+                tab_freq, tab_bi, tab_tri = st.tabs(["단어 빈도", "2-gram", "3-gram"])
+
+                with tab_freq:
+                    freq = extract_frequency(combined_text, top_n=30)
+                    if freq:
+                        col_tbl, col_chart = st.columns([1, 2])
+                        with col_tbl:
+                            import pandas as pd
+                            st.dataframe(
+                                pd.DataFrame(freq, columns=["키워드", "빈도"]),
+                                use_container_width=True, hide_index=True,
+                            )
+                        with col_chart:
+                            chart_path = generate_frequency_chart(
+                                freq[:20], title="상위 20 키워드 빈도",
+                                output_filename="freq_all.png",
+                            )
+                            if chart_path and Path(chart_path).exists():
+                                st.image(str(chart_path), use_container_width=True)
+
+                with tab_bi:
+                    bigrams = extract_ngrams(combined_text, n=2, top_n=20)
+                    if bigrams:
+                        col_tbl, col_chart = st.columns([1, 2])
+                        with col_tbl:
+                            import pandas as pd
+                            st.dataframe(
+                                pd.DataFrame(bigrams, columns=["2-gram", "빈도"]),
+                                use_container_width=True, hide_index=True,
+                            )
+                        with col_chart:
+                            chart_path = generate_ngram_chart(
+                                bigrams, n=2,
+                                output_filename="ngram2_all.png", color="#DD8452",
+                            )
+                            if chart_path and Path(chart_path).exists():
+                                st.image(str(chart_path), use_container_width=True)
+                    else:
+                        st.info("2-gram을 추출할 텍스트가 부족합니다.")
+
+                with tab_tri:
+                    trigrams = extract_ngrams(combined_text, n=3, top_n=20)
+                    if trigrams:
+                        col_tbl, col_chart = st.columns([1, 2])
+                        with col_tbl:
+                            import pandas as pd
+                            st.dataframe(
+                                pd.DataFrame(trigrams, columns=["3-gram", "빈도"]),
+                                use_container_width=True, hide_index=True,
+                            )
+                        with col_chart:
+                            chart_path = generate_ngram_chart(
+                                trigrams, n=3,
+                                output_filename="ngram3_all.png", color="#55A868",
+                            )
+                            if chart_path and Path(chart_path).exists():
+                                st.image(str(chart_path), use_container_width=True)
+                    else:
+                        st.info("3-gram을 추출할 텍스트가 부족합니다.")
 
             if sender_docs_net:
                 st.header("🕸️ 업무 관계 네트워크")

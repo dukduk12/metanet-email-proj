@@ -132,23 +132,40 @@ def build_and_render_network(
                                  line=dict(color="#7DB8D8", width=1.5, dash="dot"),
                                  hoverinfo="none", name="문서 유사"))
 
-    # 엣지 중간점 — hover로 유사도 + 근거 키워드 표시
-    hx, hy, htxt = [], [], []
+    # 엣지 중간점 — 유사도 수치 항상 표시 + hover 상세 정보
+    sx, sy, stxt, shtml = [], [], [], []  # sender_sim
+    px, py, ptxt, phtml = [], [], [], []  # pdf_sim
     for u, v, d in G.edges(data=True):
         if d.get("etype") not in ("sender_sim", "pdf_sim"):
             continue
         x0, y0 = pos[u]; x1, y1 = pos[v]
-        hx.append((x0 + x1) / 2); hy.append((y0 + y1) / 2)
+        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
         if d["etype"] == "sender_sim":
             n1 = G.nodes[u]["label"]; n2 = G.nodes[v]["label"]
-            htxt.append(f"<b>{n1} ↔ {n2}</b><br>유사도: {d['sim']}")
+            sx.append(mx); sy.append(my)
+            stxt.append(f"{d['sim']:.2f}")
+            shtml.append(f"<b>{n1} ↔ {n2}</b><br>유사도: {d['sim']:.2f}")
         else:
             f1 = G.nodes[u]["full"]; f2 = G.nodes[v]["full"]
-            htxt.append(f"<b>{f1}</b><br>↕ {f2}<br>유사도: {d['sim']}")
-    if hx:
-        traces.append(go.Scatter(x=hx, y=hy, mode="markers",
-                                 marker=dict(size=10, color="rgba(0,0,0,0)"),
-                                 hoverinfo="text", hovertext=htxt, showlegend=False))
+            px.append(mx); py.append(my)
+            ptxt.append(f"{d['sim']:.2f}")
+            phtml.append(f"<b>{f1}</b><br>↕ {f2}<br>유사도: {d['sim']:.2f}")
+    if sx:
+        traces.append(go.Scatter(
+            x=sx, y=sy, mode="markers+text",
+            marker=dict(size=22, color="rgba(232,115,90,0.18)", line=dict(color="#E8735A", width=1.2)),
+            text=stxt, textposition="middle center",
+            textfont=dict(size=10, color="#C0392B", family="Arial Black"),
+            hoverinfo="text", hovertext=shtml, showlegend=False,
+        ))
+    if px:
+        traces.append(go.Scatter(
+            x=px, y=py, mode="markers+text",
+            marker=dict(size=22, color="rgba(125,184,216,0.18)", line=dict(color="#7DB8D8", width=1.0)),
+            text=ptxt, textposition="middle center",
+            textfont=dict(size=9, color="#2471A3", family="Arial Black"),
+            hoverinfo="text", hovertext=phtml, showlegend=False,
+        ))
 
     # 노드: 발신자 (클러스터별 색)
     for cid in range(n_clusters):
